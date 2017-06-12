@@ -1,4 +1,3 @@
-
 -- Top cached SPs 
 select 
 	p.name																		AS [SP Name]
@@ -26,7 +25,7 @@ order by ps.execution_count desc
 --order by ps.total_physical_reads
 --order by ps.total_logical_writes
 option (recompile)
-
+GO
 
 -- Find bad non-clustered indexes
 select 
@@ -48,6 +47,7 @@ order by [Write Read Difference] desc
 	,[Total Writes] desc
 	,[Total Reads] asc
 option (recompile)
+GO
 
 -- Missing indexes
 select 
@@ -71,4 +71,67 @@ from sys.dm_db_missing_index_group_stats as migs with (nolock)
 where mid.database_id = db_id()
 order by [Index Advantage]
 option (recompile)
+GO
 
+--Missing index warnings for planned cache
+select
+	object_name(qp.objectid)			AS [Object Name]
+	,qp.query_plan					AS [Query Plan]
+	,cp.objtype						AS [Object Type]
+	,cp.usecounts					AS [Use Counts]
+from sys.dm_exec_cached_plans cp with (nolock)
+	cross apply sys.dm_exec_query_plan(cp.plan_handle) qp
+where cast(qp.query_plan as nvarchar(max)) like '%MissingIndex%'
+	and qp.dbid = db_id()
+order by cp.usecounts desc 
+option (recompile)
+GO
+
+-- most frequenctly modified indexes
+select 
+	o.name						AS [Object Name]
+	,o.object_id				AS [Object ID]
+	,o.type_desc				AS [Type]
+	,s.name						AS [Stats Name]
+	,s.stats_id					AS [Stats ID]
+	,s.no_recompute				AS [No Recompute]
+	,s.auto_created				AS [Auto Created]
+	,sp.modification_counter	AS [Modification Counter]
+	,sp.rows					AS [Rows]
+	,sp.rows_sampled			AS [Rows Sampled]
+	,sp.last_updated			AS [Last Updated]
+from sys.objects o with (nolock)
+	join sys.stats s with (nolock)
+		on o.object_id = s.object_id
+	cross apply sys.dm_db_stats_properties(s.object_id,s.stats_id) sp
+where o.type_desc not in (N'SYSTEM_TABLE', N'INTERNAL_TABLE')
+	and sp.modification_counter > 0
+order by sp.modification_counter desc, o.name
+option (recompile)
+GO
+
+-- index read/write stats of all tables in db
+select
+	OBJECT_NAME(s.object_id)						AS [Object Name]
+	,i.name											AS [Index Name]
+	,i.index_id										AS [Index ID]
+	,s.user_seeks + s.user_scans + s.user_lookups	AS [Reads]
+	,s.user_updates									AS [Writes]
+	,i.type_desc									AS [Index Type]
+	,i.fill_factor									AS [Fill factor]
+	,i.has_filter									AS [Has Filter]
+	,i.filter_definition							AS [Filter Definition]
+	,s.last_user_scan								AS [Last User Scan]
+	,s.last_user_seek								AS [Last User Seek]
+	,s.last_user_lookup								AS [Last User Lookup]
+	,s.last_user_update								AS [Last User Update]
+from sys.dm_db_index_usage_stats s with (nolock)
+	join sys.indexes i with (nolock)
+		on s.object_id = i.object_id
+where OBJECTPROPERTY(s.object_id, 'IsUserTable') = 1
+	and i.index_id = s.index_id
+	and s.database_id = db_id()
+order by s.user_seeks + s.user_scans + s.user_lookups desc
+--order by s.user_updates desc
+option (recompile)
+go
