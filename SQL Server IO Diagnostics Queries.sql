@@ -187,3 +187,151 @@ from sys.dm_io_virtual_file_stats(null,null) fs
 order by [Avg IO Stall (ms)] desc
 option (recompile)
 go
+
+-- VLF counts
+create table #VLFInfo
+(
+	RecoveryUnitID int
+	,FileID int
+	,FileSize bigint
+	,StartOffset bigint
+	,FSeqNo bigint
+	,Status bigint
+	,Parity bigint
+	,CreateLSN numeric(38)
+);
+
+create table #VLFCountResults
+(
+	DatabaseName sysname
+	,VLFCount int
+);
+
+exec sp_MSforeachdb 
+	N'Use [?];
+		
+		INSERT INTO #VLFInfo
+		EXEC sp_executesql N''DBCC LOGINFO([?])'';
+
+		INSERT INTO #VLFCountResults
+		SELECT DB_NAME(), COUNT(*)
+		FROM #VLFInfo;
+
+		TRUNCATE TABLE #VLFInfo;'
+
+SELECT DatabaseName, VLFCount
+FROM #VLFCountResults
+Order by VLFCount DESC;
+
+drop table #VLFCountResults
+drop table #VLFInfo
+
+ 
+
+ -- I/O Utilization by database
+ with Aggregate_IO_Statistics
+ as
+ (select 
+	db_name(database_id)															AS [Database Name]
+	,cast(sum(num_of_bytes_read + num_of_bytes_written)/1048576 AS decimal(12,2))	AS [IO_In_MB]
+ from sys.dm_io_virtual_file_stats(null, null) DM_IO_Stats
+ group by database_id)
+ select 
+	Row_number() over (order by A.[IO_In_MB] Desc)						AS [I/O Rank]
+	,A.[Database Name]													AS [Database Name]
+	,A.[IO_In_MB]														AS [Total I/O (MB)]
+	,cast([IO_In_MB]/SUM([IO_In_MB]) OVER() * 100.0 AS decimal(5,2))	AS [I/O Percent]
+ from Aggregate_IO_Statistics A
+
+--Top waits for sql server instance since restart or statistics clear
+with [Waits]
+as (
+	SELECT 
+		wait_type											AS [Wait_type]
+		,wait_time_ms/1000.0								AS [Wait (sec)]
+		,(wait_time_ms - signal_wait_time_ms) / 1000.0		AS [Resource (sec)]
+		,signal_wait_time_ms / 1000.0						AS [Signal (sec)]
+		,waiting_tasks_count								AS [WaitCount]
+		,100.0 * wait_time_ms / SUM(wait_time_ms) over()	AS [Percentage]
+		,row_number() over(order by wait_time_ms desc)		AS [RowNum]
+	FROM sys.dm_os_wait_stats with (nolock)
+	where wait_type not in (
+        N'BROKER_EVENTHANDLER', N'BROKER_RECEIVE_WAITFOR', N'BROKER_TASK_STOP',
+		N'BROKER_TO_FLUSH', N'BROKER_TRANSMITTER', N'CHECKPOINT_QUEUE',
+        N'CHKPT', N'CLR_AUTO_EVENT', N'CLR_MANUAL_EVENT', N'CLR_SEMAPHORE',
+        N'DBMIRROR_DBM_EVENT', N'DBMIRROR_EVENTS_QUEUE', N'DBMIRROR_WORKER_QUEUE',
+		N'DBMIRRORING_CMD', N'DIRTY_PAGE_POLL', N'DISPATCHER_QUEUE_SEMAPHORE',
+        N'EXECSYNC', N'FSAGENT', N'FT_IFTS_SCHEDULER_IDLE_WAIT', N'FT_IFTSHC_MUTEX',
+        N'HADR_CLUSAPI_CALL', N'HADR_FILESTREAM_IOMGR_IOCOMPLETION', N'HADR_LOGCAPTURE_WAIT', 
+		N'HADR_NOTIFICATION_DEQUEUE', N'HADR_TIMER_TASK', N'HADR_WORK_QUEUE',
+        N'KSOURCE_WAKEUP', N'LAZYWRITER_SLEEP', N'LOGMGR_QUEUE', N'ONDEMAND_TASK_QUEUE',
+        N'PWAIT_ALL_COMPONENTS_INITIALIZED', N'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP',
+        N'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP', N'QDS_SHUTDOWN_QUEUE', N'REQUEST_FOR_DEADLOCK_SEARCH',
+		N'RESOURCE_QUEUE', N'SERVER_IDLE_CHECK', N'SLEEP_BPOOL_FLUSH', N'SLEEP_DBSTARTUP',
+		N'SLEEP_DCOMSTARTUP', N'SLEEP_MASTERDBREADY', N'SLEEP_MASTERMDREADY',
+        N'SLEEP_MASTERUPGRADED', N'SLEEP_MSDBSTARTUP', N'SLEEP_SYSTEMTASK', N'SLEEP_TASK',
+        N'SLEEP_TEMPDBSTARTUP', N'SNI_HTTP_ACCEPT', N'SP_SERVER_DIAGNOSTICS_SLEEP',
+		N'SQLTRACE_BUFFER_FLUSH', N'SQLTRACE_INCREMENTAL_FLUSH_SLEEP', N'SQLTRACE_WAIT_ENTRIES',
+		N'WAIT_FOR_RESULTS', N'WAITFOR', N'WAITFOR_TASKSHUTDOWN', N'WAIT_XTP_HOST_WAIT',
+		N'WAIT_XTP_OFFLINE_CKPT_NEW_LOG', N'WAIT_XTP_CKPT_CLOSE', N'XE_DISPATCHER_JOIN',
+        N'XE_DISPATCHER_WAIT', N'XE_TIMER_EVENT')
+	)
+select
+	MAX(W1.Wait_type)														AS [Wait Type]
+	,CAST(MAX(W1.[Wait (sec)]) as decimal(16,2))							AS [Wait (sec)]
+	,CAST(MAX(W1.[Resource (sec)]) as decimal(16, 2))						AS [Resource (sec)]
+	,CAST(MAX(W1.[Signal (sec)]) as decimal(16,2))							AS [Signal (sec)]
+	,MAX(W1.WaitCount)														AS [Wait Count]
+	,CAST(MAX(W1.Percentage) AS decimal(5,2))								AS [Wait Percentage]
+	,CAST((MAX(W1.[Wait (sec)]) / MAX(W1.WaitCount)) as decimal(16,4))		AS [Avg Wait (sec)]
+	,CAST((MAX(W1.[Resource (sec)]) / MAX(W1.WaitCount)) as decimal(16,4))	AS [Avg Resource (sec)]
+	,CAST((MAX(W1.[Signal (sec)]) / MAX(W1.WaitCount)) as decimal(16,4))	AS [Avg Signal (sec)]
+from [Waits] W1
+	join [Waits] W2 on W2.RowNum <= W1.RowNum
+group by W1.RowNum
+having sum(W2.Percentage) - MAX(W1.Percentage) < 99
+go
+
+--Get average task counts 
+select 
+	avg(current_tasks_count)		AS [Avg Task Count]
+	,avg(runnable_tasks_count)		AS [Avg Runnable Task Count]
+	,avg(pending_disk_io_count)		AS [Avg Pending DiskIO Count]
+from sys.dm_os_schedulers with (nolock)
+where scheduler_id < 255
+option (recompile)
+
+
+--page life expectency (PLE) value for each NUMA node
+select 
+	@@SERVERNAME		AS [Server Name]
+	,object_name		AS [Object Name]
+	,instance_name		AS [Instance Name]
+	,cntr_value			AS [Page Life Expectancy]
+from sys.dm_os_performance_counters with (nolock)
+where object_name like '%Buffer Node%'
+	and counter_name = N'Page life expectancy'
+option (recompile);
+
+--I/O Statistics by file for current database 
+select 
+	DB_Name(db_id())																							AS [Database Name]
+	,df.name																									AS [Logical Name]
+	,vfs.file_id																								AS [File ID]
+	,df.physical_name																							AS [Physical Name]
+	,vfs.num_of_reads																							AS [Num of Reads]
+	,vfs.num_of_writes																							AS [Num of Writes]
+	,vfs.io_stall_read_ms																						AS [IO Read Stall (ms)]
+	,vfs.io_stall_write_ms																						AS [IO Write Stall (ms)]
+	,cast(100. * vfs.io_stall_read_ms/(vfs.io_stall_read_ms + vfs.io_stall_write_ms) as decimal(10,1))			AS [IO Read Stall (Pct)]
+	,cast(100. * vfs.io_stall_write_ms/(vfs.io_stall_read_ms + vfs.io_stall_write_ms) as decimal(10,1))			AS [IO Write Stall (Pct)]
+	,vfs.num_of_reads + vfs.num_of_writes																		AS [Writes + Reads]
+	,cast(vfs.num_of_bytes_read/1048576.0 as decimal(10,2))														AS [MB Read]
+	,cast(vfs.num_of_bytes_written/1048576.0 as decimal(10,2))													AS [MB Written]
+	,cast(100. * vfs.num_of_reads/(vfs.num_of_reads + vfs.num_of_writes) as decimal(10,1))						AS [# Reads (Pct)]
+	,cast(100. * vfs.num_of_writes/(vfs.num_of_writes + vfs.num_of_reads) as decimal(10,1))						AS [# Writes (Pct)]
+	,cast(100. * vfs.num_of_bytes_read/(vfs.num_of_bytes_read + vfs.num_of_bytes_written) as decimal(10,1))		AS [Read Bytes (Pct)]
+	,cast(100. * vfs.num_of_bytes_written/(vfs.num_of_bytes_read + vfs.num_of_bytes_written) as decimal(10,1))	AS [Write Bytes (Pct)]
+from sys.dm_io_virtual_file_stats(DB_ID(),NULL) as vfs
+	join sys.database_files df with (nolock)
+		on vfs.file_id = df.file_id
