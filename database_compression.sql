@@ -58,11 +58,21 @@ begin
 END
 
 SELECT 
-	CD.*
+	CD.[Type]								AS [Type]
+	,CD.[Object]							AS [Object]
+	,CD.[Schema]							AS [Schema]
+	,CD.[Index ID]							AS [Index ID]
 	,i.name									AS [IndexName]
+	,CD.[Partition]							AS [Partition
 	,count(distinct b.page_id)				AS [Buffer Count]
-	,count(distinct b.page_id) * 128		AS [Buffer Count (MB)]
-	
+	,count(distinct b.page_id) / 128		AS [Buffer Count (MB)]
+	,CD.[Size (MB)]							AS [Size (MB)]
+	,CD.[Size with Compression (MB)]		AS [Size with Compression (MB)]
+	,CD.[Size Savings (MB)]					AS [Size Savings (MB)]
+	,CD.[Size Savings (Pct)]				AS [Size Savings (Pct)]		
+	,CD.[Sample Size (MB)]					AS [Sample Size (MB)]
+	,CD.[Sample Size with Compression (MB)] AS [Sample Size with Compression (MB)]
+	,CD.[Sample Size Savings (MB)]			AS [Sample Size Savings (MB)]
 FROM (
 	SELECT 
 		'ROW'																												AS [Type]
@@ -129,4 +139,20 @@ DEALLOCATE table_cursor
 
 
 
-
+--select 
+--	object_name(p.object_id)		AS [Object Name]
+--	,p.index_id						AS [Index Id]
+--	,Count(*)/128					AS [Buffer Size (MB)]
+--	,Count(*)						AS [Buffer Count]
+--from sys.allocation_units a with (nolock)
+--	join sys.dm_os_buffer_descriptors b with (nolock)
+--		on a.allocation_unit_id = b.allocation_unit_id
+--	join sys.partitions p with (nolock)
+--		on a.container_id = p.hobt_id
+--where b.database_id = db_id()
+--	and OBJECT_NAME(object_id) = 'Person'
+--	and p.object_id > 100
+--group by p.object_id
+--	,p.index_id
+--	,p.data_compression_desc
+--order by [Buffer Count] desc;
