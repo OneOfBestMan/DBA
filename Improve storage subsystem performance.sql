@@ -34,9 +34,9 @@ select
 	,i.is_hypothetical															AS [Hypothetical]
 	,i.has_filter																AS [Filter]
 	,i.fill_factor																AS [Fill Factor]
-	,s.user_updates															AS [Total Writes]
-	,s.user_seeks + s.user_scans + s.user_lookups							AS [Total Reads]
-	,s.user_updates - (s.user_seeks + s.user_scans + s.user_lookups)	AS [Write Read Difference]
+	,s.user_updates																AS [Total Writes]
+	,s.user_seeks + s.user_scans + s.user_lookups								AS [Total Reads]
+	,s.user_updates - (s.user_seeks + s.user_scans + s.user_lookups)			AS [Write Read Difference]
 from sys.dm_db_index_usage_stats s with (nolock)
 	join sys.indexes i with (nolock) on s.index_id = i.index_id and s.object_id = i.object_id
 where OBJECTPROPERTY(s.object_id,'IsUserTable') = 1
@@ -76,9 +76,9 @@ GO
 --Missing index warnings for planned cache
 select
 	object_name(qp.objectid)			AS [Object Name]
-	,qp.query_plan					AS [Query Plan]
-	,cp.objtype						AS [Object Type]
-	,cp.usecounts					AS [Use Counts]
+	,qp.query_plan						AS [Query Plan]
+	,cp.objtype							AS [Object Type]
+	,cp.usecounts						AS [Use Counts]
 from sys.dm_exec_cached_plans cp with (nolock)
 	cross apply sys.dm_exec_query_plan(cp.plan_handle) qp
 where cast(qp.query_plan as nvarchar(max)) like '%MissingIndex%'
@@ -135,3 +135,4 @@ order by s.user_seeks + s.user_scans + s.user_lookups desc
 --order by s.user_updates desc
 option (recompile)
 go
+
